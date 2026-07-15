@@ -14,3 +14,4 @@ accelerate
 bitsandbytes
 sentence-transformers
 torch
+torchvision
