@@ -12,6 +12,24 @@ from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
+# 2. Authenticate when the user provides the token
+if manual_token:
+    try:
+        # Log in to the Hugging Face Hub
+        login(token=manual_token)
+        
+        # Set environment variable for deep integrations (like LangChain)
+        os.environ["HF_TOKEN"] = manual_token
+        
+        st.sidebar.success("Successfully authenticated!")
+        
+    except Exception as e:
+        st.sidebar.error(f"Authentication failed: {e}")
+else:
+    st.sidebar.warning("Please enter your Hugging Face Token to load the model.")
+    # Prevent the rest of your app from running until the token is provided
+    st.stop()
+
 st.set_page_config(page_title="PDF Chatbot (Qwen2.5-3B)", page_icon="📄")
 
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
