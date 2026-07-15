@@ -12,6 +12,18 @@ from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
+# 1. Create a sidebar (or main page) input for the token
+with st.sidebar:
+    st.subheader("Authentication")
+    manual_token = st.text_input(
+        "Enter your Hugging Face Token:", 
+        type="password", 
+        help="Get a token from huggingface.co/settings/tokens"
+    )
+    
+    # Optional: Save button to trigger authentication
+    auth_button = st.button("Authenticate")
+
 # 2. Authenticate when the user provides the token
 if manual_token:
     try:
