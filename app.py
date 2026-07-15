@@ -1,4 +1,4 @@
-# app.py — Streamlit PDF RAG Chatbot (matches your Colab pipeline exactly)
+# app.py — Streamlit PDF RAG Chatbot (Qwen2.5-3B via Hugging Face Inference API)
 
 import streamlit as st
 import torch
@@ -6,41 +6,32 @@ import os
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
+from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from huggingface_hub import login  
+from huggingface_hub import login
 
-# 1. Create a sidebar (or main page) input for the token
+# 1. Create a sidebar input for the token
 with st.sidebar:
     st.subheader("Authentication")
     manual_token = st.text_input(
-        "Enter your Hugging Face Token:", 
-        type="password", 
+        "Enter your Hugging Face Token:",
+        type="password",
         help="Get a token from huggingface.co/settings/tokens"
     )
-    
-    # Optional: Save button to trigger authentication
     auth_button = st.button("Authenticate")
 
 # 2. Authenticate when the user provides the token
 if manual_token:
     try:
-        # Log in to the Hugging Face Hub
         login(token=manual_token)
-        
-        # Set environment variable for deep integrations (like LangChain)
         os.environ["HF_TOKEN"] = manual_token
-        
         st.sidebar.success("Successfully authenticated!")
-        
     except Exception as e:
         st.sidebar.error(f"Authentication failed: {e}")
 else:
     st.sidebar.warning("Please enter your Hugging Face Token to load the model.")
-    # Prevent the rest of your app from running until the token is provided
     st.stop()
 
 st.set_page_config(page_title="PDF Chatbot (Qwen2.5-3B)", page_icon="📄")
@@ -62,6 +53,8 @@ Question: {question}<|im_end|>
 
 @st.cache_resource(show_spinner="Loading embedding model...")
 def load_embeddings():
+    # Embeddings model is small (~90MB) — fine to run locally even on
+    # Streamlit Cloud's free CPU tier.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return HuggingFaceEmbeddings(
         model_name=EMBED_MODEL,
@@ -69,30 +62,24 @@ def load_embeddings():
     )
 
 
-@st.cache_resource(show_spinner="Loading Qwen2.5-1.5B model (this can take a minute)...")
-def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto" if torch.cuda.is_available() else None,
-    )
-    gen_pipeline = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
+@st.cache_resource(show_spinner="Connecting to Qwen2.5-3B via Hugging Face Inference API...")
+def load_llm(_token: str):
+    # NOTE: nothing is downloaded or loaded into local RAM here — this just
+    # calls Hugging Face's hosted inference endpoint over HTTPS. This is what
+    # makes the app work on Streamlit Cloud's 1GB free tier, since the 3B
+    # model itself runs on HF's servers, not in this process.
+    return HuggingFaceEndpoint(
+        repo_id=MODEL_NAME,
+        task="text-generation",
         max_new_tokens=512,
         temperature=0.1,
-        do_sample=True,
         repetition_penalty=1.1,
+        huggingfacehub_api_token=_token,
     )
-    return HuggingFacePipeline(pipeline=gen_pipeline)
 
 
 @st.cache_resource(show_spinner="Processing PDF and building Chroma index...")
 def build_vectorstore(pdf_path: str, _embeddings):
-    # leading underscore on _embeddings tells Streamlit's cache not to
-    # try to hash that object (it isn't hashable) — it's still used normally
     loader = PyPDFLoader(pdf_path)
     documents = loader.load()
 
@@ -104,7 +91,6 @@ def build_vectorstore(pdf_path: str, _embeddings):
     )
     chunks = splitter.split_documents(documents)
 
-    # unique persist dir per PDF so re-uploading a different file doesn't collide
     persist_dir = f"chroma_db_{os.path.basename(pdf_path)}"
     vectorstore = Chroma.from_documents(
         documents=chunks,
@@ -135,7 +121,7 @@ def ask(qa_chain, question: str):
 
 # ---------- App UI ----------
 
-st.title("📄 PDF Chatbot — Qwen2.5-3B")
+st.title("📄 PDF Chatbot — Qwen2.5-3B (via HF Inference API)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
@@ -145,7 +131,7 @@ if uploaded_file is not None:
         f.write(uploaded_file.getbuffer())
 
     embeddings = load_embeddings()
-    llm = load_llm()
+    llm = load_llm(manual_token)
     vectorstore, num_chunks = build_vectorstore(pdf_path, embeddings)
     qa_chain = build_qa_chain(vectorstore, llm)
 
@@ -166,13 +152,17 @@ if uploaded_file is not None:
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer, sources = ask(qa_chain, question)
-                st.write(answer)
+                try:
+                    answer, sources = ask(qa_chain, question)
+                    st.write(answer)
 
-                with st.expander("Sources"):
-                    for doc in sources:
-                        page = doc.metadata.get("page", "?")
-                        st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
+                    with st.expander("Sources"):
+                        for doc in sources:
+                            page = doc.metadata.get("page", "?")
+                            st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
+                except Exception as e:
+                    answer = f"Error calling the model: {e}"
+                    st.error(answer)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 else:
