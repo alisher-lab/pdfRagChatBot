@@ -69,8 +69,8 @@ def load_llm(_token: str):
     return ChatOpenAI(
         model=MODEL_NAME,
         api_key=_token,
-        # Update this URL to the new Hugging Face Router
-        base_url="https://router.huggingface.co/hf-inference/v1", 
+        # Update this URL: Just /v1, which enables automatic provider routing
+        base_url="https://router.huggingface.co/v1", 
         max_tokens=512,
         temperature=0.1,
     )
