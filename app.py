@@ -11,6 +11,8 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
 from huggingface_hub import login
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
 
 # 1. Create a sidebar input for the token
 with st.sidebar:
@@ -64,17 +66,14 @@ def load_embeddings():
 
 @st.cache_resource(show_spinner="Connecting to Qwen2.5-3B via Hugging Face Inference API...")
 def load_llm(_token: str):
-    # NOTE: nothing is downloaded or loaded into local RAM here — this just
-    # calls Hugging Face's hosted inference endpoint over HTTPS. This is what
-    # makes the app work on Streamlit Cloud's 1GB free tier, since the 3B
-    # model itself runs on HF's servers, not in this process.
-    return HuggingFaceEndpoint(
-        repo_id=MODEL_NAME,
-        task="text-generation",
-        max_new_tokens=512,
+    # Using ChatOpenAI pointed at Hugging Face bypasses the text-generation routing bug entirely
+    return ChatOpenAI(
+        model=MODEL_NAME,
+        api_key=_token,
+        base_url="https://api-inference.huggingface.co/v1/",
+        max_tokens=512,
         temperature=0.1,
-        repetition_penalty=1.1,
-        huggingfacehub_api_token=_token,
+        # Note: repetition_penalty is dropped here as it is not part of the standard OpenAI spec
     )
 
 
