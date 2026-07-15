@@ -66,14 +66,13 @@ def load_embeddings():
 
 @st.cache_resource(show_spinner="Connecting to Qwen2.5-3B via Hugging Face Inference API...")
 def load_llm(_token: str):
-    # Using ChatOpenAI pointed at Hugging Face bypasses the text-generation routing bug entirely
     return ChatOpenAI(
         model=MODEL_NAME,
         api_key=_token,
-        base_url="https://api-inference.huggingface.co/v1/",
+        # Update this URL to the new Hugging Face Router
+        base_url="https://router.huggingface.co/hf-inference/v1", 
         max_tokens=512,
         temperature=0.1,
-        # Note: repetition_penalty is dropped here as it is not part of the standard OpenAI spec
     )
 
 
