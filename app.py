@@ -38,7 +38,7 @@ else:
 
 st.set_page_config(page_title="PDF Chatbot (Qwen2.5-3B)", page_icon="📄")
 
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct:featherless-ai"
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 PROMPT_TEMPLATE = """<|im_start|>system
@@ -67,9 +67,8 @@ def load_embeddings():
 @st.cache_resource(show_spinner="Connecting to Qwen2.5-3B via Hugging Face Inference API...")
 def load_llm(_token: str):
     return ChatOpenAI(
-        model=MODEL_NAME,
+        model=MODEL_NAME,  # This will now pass "Qwen/Qwen2.5-3B-Instruct:featherless-ai"
         api_key=_token,
-        # Update this URL: Just /v1, which enables automatic provider routing
         base_url="https://router.huggingface.co/v1", 
         max_tokens=512,
         temperature=0.1,
