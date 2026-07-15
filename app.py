@@ -69,7 +69,7 @@ def load_embeddings():
     )
 
 
-@st.cache_resource(show_spinner="Loading Qwen2.5-3B model (this can take a minute)...")
+@st.cache_resource(show_spinner="Loading Qwen2.5-1.5B model (this can take a minute)...")
 def load_llm():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
