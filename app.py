@@ -11,6 +11,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from huggingface_hub import login  
 
 # 1. Create a sidebar (or main page) input for the token
 with st.sidebar:
