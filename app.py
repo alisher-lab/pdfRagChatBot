@@ -1,4 +1,4 @@
-# app.py — Streamlit PDF RAG Chatbot (Qwen2.5-3B via Hugging Face Inference API)
+# app.py — Streamlit PDF RAG Chatbot (Qwen2.5-3B via Hugging Face Inference API, streaming)
 
 import streamlit as st
 import torch
@@ -6,12 +6,10 @@ import os
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
-from langchain_classic.chains import RetrievalQA
 from huggingface_hub import login
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 
 # 1. Create a sidebar input for the token
@@ -41,22 +39,20 @@ st.set_page_config(page_title="PDF Chatbot (Qwen2.5-3B)", page_icon="📄")
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct:featherless-ai"
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-PROMPT_TEMPLATE = """<|im_start|>system
-You are a helpful assistant that answers questions using ONLY the provided context from a PDF document. If the answer is not in the context, say "I don't know based on the document."<|im_end|>
-<|im_start|>user
+PROMPT_TEMPLATE = """You are a helpful assistant that answers questions using ONLY the provided context from a PDF document. If the answer is not in the context, say "I don't know based on the document."
+
 Context:
 {context}
-Question: {question}<|im_end|>
-<|im_start|>assistant
-"""
+
+Question: {question}"""
+
+PROMPT = PromptTemplate(template=PROMPT_TEMPLATE, input_variables=["context", "question"])
 
 
 # ---------- Cached resources: built ONCE per server process, reused across every rerun ----------
 
 @st.cache_resource(show_spinner="Loading embedding model...")
 def load_embeddings():
-    # Embeddings model is small (~90MB) — fine to run locally even on
-    # Streamlit Cloud's free CPU tier.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return HuggingFaceEmbeddings(
         model_name=EMBED_MODEL,
@@ -67,11 +63,12 @@ def load_embeddings():
 @st.cache_resource(show_spinner="Connecting to Qwen2.5-3B via Hugging Face Inference API...")
 def load_llm(_token: str):
     return ChatOpenAI(
-        model=MODEL_NAME,  # This will now pass "Qwen/Qwen2.5-3B-Instruct:featherless-ai"
+        model=MODEL_NAME,
         api_key=_token,
-        base_url="https://router.huggingface.co/v1", 
+        base_url="https://router.huggingface.co/v1",
         max_tokens=512,
         temperature=0.1,
+        streaming=True,   # enables token-by-token streaming
     )
 
 
@@ -97,23 +94,20 @@ def build_vectorstore(pdf_path: str, _embeddings):
     return vectorstore, len(chunks)
 
 
-@st.cache_resource(show_spinner=False)
-def build_qa_chain(_vectorstore, _llm, k=4):
-    prompt = PromptTemplate(template=PROMPT_TEMPLATE, input_variables=["context", "question"])
-    retriever = _vectorstore.as_retriever(search_kwargs={"k": k})
-    return RetrievalQA.from_chain_type(
-        llm=_llm,
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={"prompt": prompt},
-        return_source_documents=True,
-    )
+def retrieve_context(vectorstore, question: str, k: int = 4):
+    """Runs retrieval only — no generation — so we can stream the LLM part separately."""
+    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+    docs = retriever.invoke(question)
+    context = "\n\n".join(doc.page_content for doc in docs)
+    return context, docs
 
 
-def ask(qa_chain, question: str):
-    result = qa_chain.invoke({"query": question})
-    answer = result["result"].split("<|im_start|>assistant")[-1].strip()
-    return answer, result["source_documents"]
+def stream_answer(llm, context: str, question: str):
+    """Generator that yields text chunks as they arrive — fed straight into st.write_stream."""
+    prompt_text = PROMPT.format(context=context, question=question)
+    for chunk in llm.stream(prompt_text):
+        if chunk.content:
+            yield chunk.content
 
 
 # ---------- App UI ----------
@@ -130,7 +124,6 @@ if uploaded_file is not None:
     embeddings = load_embeddings()
     llm = load_llm(manual_token)
     vectorstore, num_chunks = build_vectorstore(pdf_path, embeddings)
-    qa_chain = build_qa_chain(vectorstore, llm)
 
     st.success(f"PDF indexed into {num_chunks} chunks. Ask away.")
 
@@ -148,18 +141,21 @@ if uploaded_file is not None:
             st.write(question)
 
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    answer, sources = ask(qa_chain, question)
-                    st.write(answer)
+            try:
+                with st.spinner("Searching the document..."):
+                    context, sources = retrieve_context(vectorstore, question)
 
-                    with st.expander("Sources"):
-                        for doc in sources:
-                            page = doc.metadata.get("page", "?")
-                            st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
-                except Exception as e:
-                    answer = f"Error calling the model: {e}"
-                    st.error(answer)
+                # st.write_stream consumes the generator chunk-by-chunk, rendering
+                # each piece as it arrives, and returns the full concatenated text.
+                answer = st.write_stream(stream_answer(llm, context, question))
+
+                with st.expander("Sources"):
+                    for doc in sources:
+                        page = doc.metadata.get("page", "?")
+                        st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
+            except Exception as e:
+                answer = f"Error calling the model: {e}"
+                st.error(answer)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 else:
