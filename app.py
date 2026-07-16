@@ -4,37 +4,88 @@ import streamlit as st
 import torch
 import os
 
+from dotenv import load_dotenv
+from huggingface_hub import HfApi
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
-from huggingface_hub import login
 from langchain_openai import ChatOpenAI
 
-# 1. Create a sidebar input for the token
-with st.sidebar:
-    st.subheader("Authentication")
-    manual_token = st.text_input(
-        "Enter your Hugging Face Token:",
-        type="password",
-        help="Get a token from huggingface.co/settings/tokens"
-    )
-    auth_button = st.button("Authenticate")
-
-# 2. Authenticate when the user provides the token
-if manual_token:
-    try:
-        login(token=manual_token)
-        os.environ["HF_TOKEN"] = manual_token
-        st.sidebar.success("Successfully authenticated!")
-    except Exception as e:
-        st.sidebar.error(f"Authentication failed: {e}")
-else:
-    st.sidebar.warning("Please enter your Hugging Face Token to load the model.")
-    st.stop()
+# Load variables from a local .env file (if one exists) into os.environ.
+# .env should contain a line like: HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+load_dotenv()
 
 st.set_page_config(page_title="PDF Chatbot (Qwen2.5-3B)", page_icon="📄")
+
+
+def validate_hf_token(token: str):
+    """Checks the token is real and active by asking HF who it belongs to."""
+    try:
+        api = HfApi()
+        user_info = api.whoami(token=token)
+        return True, user_info.get("name", "unknown user")
+    except Exception as e:
+        return False, str(e)
+
+
+# ---------- Token resolution: st.secrets -> .env -> manual input ----------
+
+def get_secrets_token():
+    """st.secrets works both locally (.streamlit/secrets.toml) and on
+    Streamlit Community Cloud (dashboard-configured secrets). Accessing it
+    when no secrets file exists at all doesn't error — it's just empty."""
+    try:
+        return st.secrets.get("HF_TOKEN")
+    except Exception:
+        return None
+
+
+with st.sidebar:
+    st.subheader("Authentication")
+
+    secrets_token = get_secrets_token()
+    env_token = os.getenv("HF_TOKEN")
+
+    if secrets_token:
+        source = "st.secrets"
+        candidate_token = secrets_token
+    elif env_token:
+        source = ".env"
+        candidate_token = env_token
+    else:
+        candidate_token = None
+
+    if candidate_token:
+        valid, info = validate_hf_token(candidate_token)
+        if valid:
+            st.success(f"Authenticated via {source} as **{info}**")
+            manual_token = candidate_token
+        else:
+            st.error(f"Token found in {source} but invalid: {info}")
+            st.stop()
+    else:
+        st.info("No secrets.toml or .env token found — enter one manually.")
+        manual_token = st.text_input(
+            "Hugging Face Token:",
+            type="password",
+            help="Get a token from huggingface.co/settings/tokens",
+        )
+        if manual_token:
+            valid, info = validate_hf_token(manual_token)
+            if valid:
+                st.success(f"Authenticated as **{info}**")
+            else:
+                st.error(f"Authentication failed: {info}")
+                st.stop()
+        else:
+            st.warning("Please provide a Hugging Face token to continue.")
+            st.stop()
+
+os.environ["HF_TOKEN"] = manual_token
+
 
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct:featherless-ai"
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -68,7 +119,7 @@ def load_llm(_token: str):
         base_url="https://router.huggingface.co/v1",
         max_tokens=512,
         temperature=0.1,
-        streaming=True,   # enables token-by-token streaming
+        streaming=True,
     )
 
 
@@ -95,7 +146,6 @@ def build_vectorstore(pdf_path: str, _embeddings):
 
 
 def retrieve_context(vectorstore, question: str, k: int = 4):
-    """Runs retrieval only — no generation — so we can stream the LLM part separately."""
     retriever = vectorstore.as_retriever(search_kwargs={"k": k})
     docs = retriever.invoke(question)
     context = "\n\n".join(doc.page_content for doc in docs)
@@ -103,7 +153,6 @@ def retrieve_context(vectorstore, question: str, k: int = 4):
 
 
 def stream_answer(llm, context: str, question: str):
-    """Generator that yields text chunks as they arrive — fed straight into st.write_stream."""
     prompt_text = PROMPT.format(context=context, question=question)
     for chunk in llm.stream(prompt_text):
         if chunk.content:
@@ -145,8 +194,6 @@ if uploaded_file is not None:
                 with st.spinner("Searching the document..."):
                     context, sources = retrieve_context(vectorstore, question)
 
-                # st.write_stream consumes the generator chunk-by-chunk, rendering
-                # each piece as it arrives, and returns the full concatenated text.
                 answer = st.write_stream(stream_answer(llm, context, question))
 
                 with st.expander("Sources"):
