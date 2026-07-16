@@ -159,30 +159,6 @@ def stream_answer(llm, context: str, question: str):
             yield chunk.content
 
 
-GREETINGS = {
-    "hi", "hii", "hello", "hey", "heya", "yo", "hola",
-    "good morning", "good afternoon", "good evening", "greetings",
-}
-
-
-def is_greeting(text: str) -> bool:
-    cleaned = text.strip().lower().strip("!.?")
-    return cleaned in GREETINGS
-
-
-def stream_greeting():
-    """Bypasses retrieval + the strict context-only prompt entirely, since
-    forcing a plain 'hi' through that prompt is what produced the stiff,
-    over-formal reply. Streamed word-by-word to match the normal answer UX."""
-    reply = (
-        "Hey there! 👋 I'm ready to help you with this document — "
-        "ask me anything about it, like a summary, a specific detail, "
-        "or an explanation of something in it. What would you like to know?"
-    )
-    for word in reply.split(" "):
-        yield word + " "
-
-
 # ---------- App UI ----------
 
 st.title("📄 PDF Chatbot — Qwen2.5-3B (via HF Inference API)")
@@ -215,18 +191,15 @@ if uploaded_file is not None:
 
         with st.chat_message("assistant"):
             try:
-                if is_greeting(question):
-                    answer = st.write_stream(stream_greeting())
-                else:
-                    with st.spinner("Searching the document..."):
-                        context, sources = retrieve_context(vectorstore, question)
+                with st.spinner("Searching the document..."):
+                    context, sources = retrieve_context(vectorstore, question)
 
-                    answer = st.write_stream(stream_answer(llm, context, question))
+                answer = st.write_stream(stream_answer(llm, context, question))
 
-                    with st.expander("Sources"):
-                        for doc in sources:
-                            page = doc.metadata.get("page", "?")
-                            st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
+                with st.expander("Sources"):
+                    for doc in sources:
+                        page = doc.metadata.get("page", "?")
+                        st.markdown(f"**Page {page}:** {doc.page_content[:200]}...")
             except Exception as e:
                 answer = f"Error calling the model: {e}"
                 st.error(answer)
